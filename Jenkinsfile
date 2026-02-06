@@ -1,26 +1,19 @@
 pipeline {
     agent { label 'Jenkins-Agent' }
-
     tools {
         jdk 'Java17'
         maven 'Maven3'
     }
-
     environment {
         APP_NAME = "register-app-pipeline"
         RELEASE = "1.0.0"
-
         DOCKER_USER = "ashfaque9x"
         DOCKER_PASS = 'dockerhub'
-
         IMAGE_NAME = "${DOCKER_USER}/${APP_NAME}"
-        IMAGE_TAG  = "${RELEASE}-${BUILD_NUMBER}"
-
+        IMAGE_TAG = "${RELEASE}-${BUILD_NUMBER}"
         JENKINS_API_TOKEN = credentials("JENKINS_API_TOKEN")
     }
-
     stages {
-
         stage("Cleanup Workspace") {
             steps {
                 cleanWs()
@@ -47,18 +40,16 @@ pipeline {
             }
         }
 
-        stage("SonarQube Analysis") {
+        // ===== مؤقتا تم تعطيل SonarQube =====
+        stage("SonarQube Analysis (SKIPPED)") {
             steps {
-                withSonarQubeEnv(credentialsId: 'jenkins-sonarqube-token') {
-                    sh "mvn sonar:sonar"
-                }
+                echo "Skipping SonarQube Analysis since no token/server available"
             }
         }
 
-        stage("Quality Gate") {
+        stage("Quality Gate (SKIPPED)") {
             steps {
-                waitForQualityGate abortPipeline: false,
-                                   credentialsId: 'jenkins-sonarqube-token'
+                echo "Skipping Quality Gate"
             }
         }
 
@@ -66,9 +57,11 @@ pipeline {
             steps {
                 script {
                     docker.withRegistry('', DOCKER_PASS) {
-                        def dockerImage = docker.build("${IMAGE_NAME}")
-                        dockerImage.push("${IMAGE_TAG}")
-                        dockerImage.push("latest")
+                        docker_image = docker.build("${IMAGE_NAME}")
+                    }
+                    docker.withRegistry('', DOCKER_PASS) {
+                        docker_image.push("${IMAGE_TAG}")
+                        docker_image.push('latest')
                     }
                 }
             }
@@ -76,54 +69,47 @@ pipeline {
 
         stage("Trivy Scan") {
             steps {
-                sh """
-                docker run --rm \
-                -v /var/run/docker.sock:/var/run/docker.sock \
-                aquasec/trivy image ${IMAGE_NAME}:latest \
-                --no-progress \
-                --scanners vuln \
-                --severity HIGH,CRITICAL \
-                --exit-code 0
-                """
+                script {
+                    sh "docker run -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image ${IMAGE_NAME}:latest --no-progress --scanners vuln --exit-code 0 --severity HIGH,CRITICAL --format table"
+                }
             }
         }
 
         stage("Cleanup Artifacts") {
             steps {
-                sh "docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || true"
-                sh "docker rmi ${IMAGE_NAME}:latest || true"
+                script {
+                    sh "docker rmi ${IMAGE_NAME}:${IMAGE_TAG}"
+                    sh "docker rmi ${IMAGE_NAME}:latest"
+                }
             }
         }
 
         stage("Trigger CD Pipeline") {
             steps {
-                sh """
-                curl -k -X POST \
-                --user clouduser:${JENKINS_API_TOKEN} \
-                --data IMAGE_TAG=${IMAGE_TAG} \
-                http://ec2-13-232-128-192.ap-south-1.compute.amazonaws.com:8080/job/gitops-register-app-cd/buildWithParameters?token=gitops-token
-                """
+                script {
+                    sh """
+                    curl -v -k --user clouduser:${JENKINS_API_TOKEN} \
+                    -X POST -H 'cache-control: no-cache' -H 'content-type: application/x-www-form-urlencoded' \
+                    --data 'IMAGE_TAG=${IMAGE_TAG}' \
+                    'ec2-13-232-128-192.ap-south-1.compute.amazonaws.com:8080/job/gitops-register-app-cd/buildWithParameters?token=gitops-token'
+                    """
+                }
             }
         }
     }
 
     post {
-        success {
-            emailext(
-                subject: "${env.JOB_NAME} - Build #${env.BUILD_NUMBER} - SUCCESS",
-                body: '''${SCRIPT, template="groovy-html.template"}''',
-                mimeType: 'text/html',
-                to: "hm538974@gmail.com"
-            )
-        }
-
         failure {
-            emailext(
-                subject: "${env.JOB_NAME} - Build #${env.BUILD_NUMBER} - FAILED",
-                body: '''${SCRIPT, template="groovy-html.template"}''',
-                mimeType: 'text/html',
-                to: "hm538974@gmail.com"
-            )
+            emailext body: '''${SCRIPT, template="groovy-html.template"}''',
+                     subject: "${env.JOB_NAME} - Build # ${env.BUILD_NUMBER} - Failed",
+                     mimeType: 'text/html',
+                     to: "hm538974@gmail.com"
+        }
+        success {
+            emailext body: '''${SCRIPT, template="groovy-html.template"}''',
+                     subject: "${env.JOB_NAME} - Build # ${env.BUILD_NUMBER} - Successful",
+                     mimeType: 'text/html',
+                     to: "hm538974@gmail.com"
         }
     }
 }
