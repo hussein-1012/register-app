@@ -15,9 +15,7 @@ pipeline {
     }
     stages {
         stage("Cleanup Workspace") {
-            steps {
-                cleanWs()
-            }
+            steps { cleanWs() }
         }
 
         stage("Checkout from SCM") {
@@ -29,27 +27,29 @@ pipeline {
         }
 
         stage("Build Application") {
-            steps {
-                sh "mvn clean package"
-            }
+            steps { sh "mvn clean package" }
         }
 
         stage("Test Application") {
+            steps { sh "mvn test" }
+        }
+
+        stage("SonarQube Analysis") {
             steps {
-                sh "mvn test"
+                script {
+                    // استخدم ID اللي خزّنت فيه token بتاع SonarQube على Jenkins
+                    withSonarQubeEnv('jenkins-sonarqube-token') {
+                        sh "mvn sonar:sonar"
+                    }
+                }
             }
         }
 
-        // ===== مؤقتا تم تعطيل SonarQube =====
-        stage("SonarQube Analysis (SKIPPED)") {
+        stage("Quality Gate") {
             steps {
-                echo "Skipping SonarQube Analysis since no token/server available"
-            }
-        }
-
-        stage("Quality Gate (SKIPPED)") {
-            steps {
-                echo "Skipping Quality Gate"
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'jenkins-sonarqube-token'
+                }
             }
         }
 
